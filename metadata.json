@@ -1,0 +1,6 @@
+{
+  "name": "TaskFlow - Team Task Board",
+  "description": "A modern team task board built for Dodil. Real-time lists, roles, activity audit log, and full MCP support for Claude and ChatGPT.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
