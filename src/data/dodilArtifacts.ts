@@ -1,12 +1,6 @@
 /**
  * Dodil Boards Challenge Contest Artifacts
- * Ready-to-copy code and configurations meeting all 6 Dodil rules:
- * 1. Public Dodil Git repo structure
- * 2. DataK3, appid user pool, Ignite, Dodil Models
- * 3. Dodil Git CI deploy workflow
- * 4. MCP endpoint with action-based tools
- * 5. Remixable with valid .dodil/remix.yaml
- * 6. Original name and design (TaskFlow)
+ * Synchronized with official git.dodil.io/dodil/boards-challenge starter
  */
 
 export interface DodilFileItem {
@@ -20,293 +14,407 @@ export const dodilArtifacts: DodilFileItem[] = [
   {
     path: '.dodil/remix.yaml',
     language: 'yaml',
-    description: 'Remix declaration specifying DataK3 bucket, appid user pool, and service account.',
-    content: `version: 1
-name: taskflow
-description: "A modern team task board for Dodil with native MCP actions and role enforcement"
-
-resources:
-  # DataK3 bucket for all persistence (name must be <= 25 chars)
-  - kind: bucket
-    name: taskflow-data
-    on_conflict: fail
-    init:
-      sql: schema.sql
-
-  # Dodil appid user pool for seamless identity
-  - kind: user_pool
-    name: taskflow-users
-    on_conflict: fail
-
-  # Service account with DataK3 and Dodil Models permissions
-  - kind: service_account
-    name: taskflow-sa
-    roles:
-      - datak3.editor
-      - models.user
+    description: 'What a remix creates in the remixer org (DataK3 bucket, appid user pool, service account).',
+    content: `# What a remix creates in the organization it goes into. Reference: \`dodil guide remix\`.
+version: 1
+description: Boards starter for the Dodil Boards Challenge. FastAPI + DataK3 + appid + Models + MCP.
+topics: [boards, starter, fastapi, dodil-challenge, dodil-challenge-boards]
+provision:
+  buckets:
+    - name: "\${{ dodil.repo }}-data"      # keep the repo name <= 18 characters (25 max here)
+      schema: schema.sql
+  user_pools:
+    - name: "\${{ dodil.repo }}-users"
+      roles: [member]
+  service_accounts:
+    - name: "\${{ dodil.repo }}-app"
+      grants:
+        - { role: k3.editor, bucket: "\${{ dodil.repo }}-data" }
+        - { role: ignite.model-user }      # the app calls Dodil Models, billed to the remixer's org
+      secrets:
+        client_id: DODIL_SERVICE_ACCOUNT_ID
+        client_secret: DODIL_SERVICE_ACCOUNT_SECRET
 `,
   },
   {
     path: '.dodil/deploy.yaml',
     language: 'yaml',
-    description: 'Ignite deployment workflow executed on Git push.',
-    content: `name: Deploy TaskFlow to Ignite
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    runs-on: dodil-ignite
-    steps:
-      - uses: actions/checkout@v1
-      - name: Build and deploy service
-        run: dodil ignite deploy --service taskflow --port 8000
-        env:
-          DODIL_SERVICE_ACCOUNT_ID: \${{ secrets.DODIL_SERVICE_ACCOUNT_ID }}
-          DODIL_SERVICE_ACCOUNT_SECRET: \${{ secrets.DODIL_SERVICE_ACCOUNT_SECRET }}
-          DATAK3_BUCKET: taskflow-data
-          APPID_POOL: taskflow-users
+    description: 'How CI deploys every copy of this repo to a live Ignite service.',
+    content: `# How CI deploys every copy of this repo. Names render from the copy's own repo and org.
+version: 1
+create_if_missing: true
+apps:
+  - name: "\${{ dodil.repo }}"
+    image: "{registry}/{org}/{repo}:{sha}"
+    port: 8080
+    resources: { tier: small }
+    scaling: { max_replicas: 2 }
+    # The gateway signs people in through the pool and passes who they are to the app.
+    # public_invoke lets Claude/ChatGPT discover the sign-in metadata; the app itself
+    # refuses every route without a signed-in person (except /healthz and the metadata).
+    user_pool: "\${{ dodil.repo }}-users"
+    public_invoke: true
+    health: { path: /healthz }
+    env:
+      BUCKET: "\${{ dodil.repo }}-data"
+      PG_HOST: pg.uk-lon-1.dodil.io
+      DODIL_USER_POOL: "\${{ dodil.org }}/\${{ dodil.repo }}-users"
+      MODELS_BASE: https://api.dodil.io/v1
+      CHAT_MODEL: kimi-k2.6
+      DODIL_SERVICE_ACCOUNT_ID: "\${{ secrets.DODIL_SERVICE_ACCOUNT_ID }}"
+      DODIL_SERVICE_ACCOUNT_SECRET: "\${{ secrets.DODIL_SERVICE_ACCOUNT_SECRET }}"
+when:
+  branches: [main]
+  require_checks: all
 `,
   },
   {
     path: 'schema.sql',
     language: 'sql',
-    description: 'Postgres schema for DataK3 with explicit primary keys and indexes.',
-    content: `-- DataK3 Schema for TaskFlow
-
-CREATE TABLE IF NOT EXISTS workspaces (
-    id VARCHAR(64) PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS users (
-    id VARCHAR(64) PRIMARY KEY,
-    workspace_id VARCHAR(64) REFERENCES workspaces(id),
-    name VARCHAR(255) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    role VARCHAR(32) NOT NULL DEFAULT 'member', -- owner, member, viewer
-    avatar_url TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
+    description: 'DataK3 PostgreSQL tables (natural keys only, no SERIAL).',
+    content: `-- Created once by the remix, in the bucket it makes. Natural keys only: DataK3 has no sequences.
 CREATE TABLE IF NOT EXISTS boards (
-    id VARCHAR(64) PRIMARY KEY,
-    workspace_id VARCHAR(64) REFERENCES workspaces(id),
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
-    color VARCHAR(32) DEFAULT '#3b82f6',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  owner_email TEXT NOT NULL,
+  created_at TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS board_members (
-    board_id VARCHAR(64) REFERENCES boards(id) ON DELETE CASCADE,
-    user_id VARCHAR(64) REFERENCES users(id) ON DELETE CASCADE,
-    PRIMARY KEY (board_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS lists (
-    id VARCHAR(64) PRIMARY KEY,
-    board_id VARCHAR(64) REFERENCES boards(id) ON DELETE CASCADE,
-    title VARCHAR(255) NOT NULL,
-    sort_order INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS memberships (
+  id TEXT PRIMARY KEY,            -- board_id + ':' + email
+  board_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL              -- owner | member | viewer
 );
 
 CREATE TABLE IF NOT EXISTS cards (
-    id BIGINT PRIMARY KEY,
-    board_id VARCHAR(64) REFERENCES boards(id) ON DELETE CASCADE,
-    list_id VARCHAR(64) REFERENCES lists(id) ON DELETE CASCADE,
-    title VARCHAR(255) NOT NULL,
-    description TEXT,
-    assignee_id VARCHAR(64) REFERENCES users(id),
-    due_date DATE,
-    labels TEXT[], -- array of labels
-    sort_order INT NOT NULL DEFAULT 0,
-    blocked_by BIGINT[],
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id TEXT PRIMARY KEY,
+  board_id TEXT NOT NULL,
+  list_name TEXT NOT NULL,        -- To do | Doing | Done
+  title TEXT NOT NULL,
+  assignee TEXT,
+  due_date DATE,
+  updated_at TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS activity_logs (
-    id VARCHAR(64) PRIMARY KEY,
-    board_id VARCHAR(64) REFERENCES boards(id) ON DELETE CASCADE,
-    card_id BIGINT,
-    user_id VARCHAR(64) REFERENCES users(id),
-    action VARCHAR(64) NOT NULL,
-    details TEXT NOT NULL,
-    from_list VARCHAR(255),
-    to_list VARCHAR(255),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS activity (
+  id TEXT PRIMARY KEY,
+  board_id TEXT NOT NULL,
+  card_id TEXT,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  event_at TIMESTAMP
 );
-
-CREATE INDEX IF NOT EXISTS idx_cards_board ON cards(board_id);
-CREATE INDEX IF NOT EXISTS idx_cards_list ON cards(list_id);
-CREATE INDEX IF NOT EXISTS idx_activity_board ON activity_logs(board_id);
 `,
   },
   {
-    path: 'app/domain/models.py',
+    path: 'app/boards/domain/model.py',
     language: 'python',
-    description: 'Domain models and business permission invariants.',
-    content: `from dataclasses import dataclass
-from typing import List, Optional
-from datetime import date, datetime
+    description: 'The board rules and domain model: viewer cannot edit, owner manages members.',
+    content: `"""The board's language and rules. No database, no HTTP: plain Python you can test in a second."""
+from dataclasses import dataclass, field
+from datetime import date
 from enum import Enum
+from typing import Optional
+
+LISTS = ("To do", "Doing", "Done")
 
 class Role(str, Enum):
     OWNER = "owner"
     MEMBER = "member"
     VIEWER = "viewer"
 
-@dataclass
-class User:
-    id: str
-    name: str
+class Forbidden(Exception):
+    """The person may not do this. The doors turn it into 403 (web) or a tool error (MCP)."""
+
+class Invalid(Exception):
+    """The request breaks a rule of the board itself. 422 / tool error."""
+
+@dataclass(frozen=True)
+class Person:
+    """Who is acting: taken from the gateway's sign-in, never from the request body."""
     email: str
-    role: Role
 
 @dataclass
 class Card:
-    id: int
+    id: str
     board_id: str
-    list_id: str
     title: str
-    description: str
-    assignee_id: Optional[str]
-    due_date: Optional[date]
-    labels: List[str]
-    sort_order: int
-    blocked_by: List[int]
+    list_name: str = LISTS[0]
+    assignee: Optional[str] = None
+    due_date: Optional[date] = None
 
-class DomainRules:
-    @staticmethod
-    def can_edit_board(user: User, member_ids: List[str]) -> bool:
-        if user.role == Role.VIEWER:
-            return False
-        if user.role == Role.OWNER:
-            return True
-        return user.id in member_ids
+    def move_to(self, list_name: str) -> None:
+        if list_name not in LISTS:
+            raise Invalid(f"unknown list {list_name!r}; lists are {', '.join(LISTS)}")
+        self.list_name = list_name
 
-    @staticmethod
-    def can_manage_members(user: User) -> bool:
-        return user.role == Role.OWNER
+@dataclass
+class Board:
+    id: str
+    title: str
+    owner_email: str
+    members: dict = field(default_factory=dict)  # email -> Role
 
-    @staticmethod
-    def is_card_overdue(card: Card, ref_date: Optional[date] = None) -> bool:
-        if not card.due_date:
-            return False
-        ref = ref_date or date.today()
-        return card.due_date < ref
+    def role_of(self, person: Person) -> Optional[Role]:
+        if person.email == self.owner_email:
+            return Role.OWNER
+        return self.members.get(person.email)
+
+    def require_view(self, person: Person) -> None:
+        if self.role_of(person) is None:
+            raise Forbidden("you are not on this board")
+
+    def require_edit(self, person: Person) -> None:
+        role = self.role_of(person)
+        if role is None:
+            raise Forbidden("you are not on this board")
+        if role is Role.VIEWER:
+            raise Forbidden("viewers can't change the board")
+
+    def add_member(self, by: Person, email: str, role: Role) -> None:
+        if self.role_of(by) is not Role.OWNER:
+            raise Forbidden("only the owner manages members")
+        if role is Role.OWNER:
+            raise Invalid("a board has one owner")
+        self.members[email.strip().lower()] = role
 `,
   },
   {
-    path: 'app/application/use_cases.py',
+    path: 'app/boards/application/use_cases.py',
     language: 'python',
-    description: 'Shared use-cases called by both Web routes and MCP tools.',
-    content: `from typing import List, Dict, Any, Optional
-from app.domain.models import User, Card, Role, DomainRules
-from app.infrastructure.datak3 import DataK3Repository
-from app.infrastructure.models import DodilModelsClient
+    description: 'Shared use cases called by both Web routes and MCP tools.',
+    content: `"""Every action a person can take. Web routes and MCP tools both call these and nothing else."""
+import uuid
+from dataclasses import asdict
+from typing import Optional
+from boards.application.ports import Assistant, BoardRepository
+from boards.domain.model import Board, Card, Forbidden, Invalid, Person, Role
 
-class BoardUseCases:
-    def __init__(self, repo: DataK3Repository, ai: DodilModelsClient):
-        self.repo = repo
-        self.ai = ai
+class NotFound(Exception):
+    pass
 
-    def move_card(self, user: User, card_id: int, target_list_title: str) -> Dict[str, Any]:
+def _card(c: Card) -> dict:
+    d = asdict(c)
+    d["due_date"] = c.due_date.isoformat() if c.due_date else None
+    return d
+
+class Boards:
+    def __init__(self, repo: BoardRepository, assistant: Optional[Assistant] = None):
+        self.repo, self.assistant = repo, assistant
+
+    def _board(self, board_id: str, person: Person) -> Board:
+        board = self.repo.get(board_id)
+        if board is None:
+            raise NotFound("no such board")
+        try:
+            board.require_view(person)
+        except Forbidden:
+            raise NotFound("no such board")  # invisible board doesn't exist for you
+        return board
+
+    def _find_card(self, card_id: str, person: Person) -> tuple:
         card = self.repo.get_card(card_id)
-        if not card:
-            raise ValueError(f"Card {card_id} not found")
+        if card is None:
+            raise NotFound("no such card")
+        return self._board(card.board_id, person), card
 
-        board = self.repo.get_board(card.board_id)
-        if not DomainRules.can_edit_board(user, board.member_ids):
-            raise PermissionError(f"Viewer or non-member cannot move cards")
+    def create_board(self, person: Person, title: str) -> dict:
+        if not title.strip():
+            raise Invalid("a board needs a title")
+        board = Board(id=uuid.uuid4().hex[:12], title=title.strip(), owner_email=person.email)
+        self.repo.save_board(board)
+        self.repo.log(board.id, None, person.email, f"created board {board.title!r}")
+        return {"id": board.id, "title": board.title}
 
-        target_list = self.repo.find_list_by_title(card.board_id, target_list_title)
-        if not target_list:
-            raise ValueError(f"List {target_list_title} not found")
+    def my_boards(self, person: Person) -> list:
+        return [{"id": b.id, "title": b.title, "role": b.role_of(person).value}
+                for b in self.repo.boards_for(person.email)]
 
-        old_list = self.repo.get_list(card.list_id)
-        self.repo.update_card_list(card_id, target_list.id)
+    def show_board(self, person: Person, board_id: str) -> dict:
+        board = self._board(board_id, person)
+        cards = [_card(c) for c in self.repo.cards_on(board.id)]
+        return {"id": board.id, "title": board.title, "role": board.role_of(person).value,
+                "cards": cards}
 
-        self.repo.record_activity(
-            board_id=board.id,
-            card_id=card_id,
-            user_id=user.id,
-            action="move_card",
-            details=f"{user.name} moved card #{card_id} to {target_list.title}",
-            from_list=old_list.title,
-            to_list=target_list.title
-        )
-        return {"card_id": card_id, "new_list": target_list.title}
+    def add_member(self, person: Person, board_id: str, email: str, role: str) -> dict:
+        board = self._board(board_id, person)
+        board.add_member(person, email, Role(role))
+        self.repo.save_board(board)
+        self.repo.log(board.id, None, person.email, f"added {email} as {role}")
+        return {"board_id": board.id, "email": email, "role": role}
 
-    def list_my_cards(self, user: User) -> List[Dict[str, Any]]:
-        # Enforce boundary: only boards the user can see
-        boards = self.repo.get_user_accessible_boards(user)
-        board_ids = [b.id for b in boards]
-        return self.repo.get_cards_assigned_to_user(user.id, board_ids)
+    def add_card(self, person: Person, board_id: str, title: str, list_name: str = "To do") -> dict:
+        board = self._board(board_id, person)
+        board.require_edit(person)
+        card = Card(id=uuid.uuid4().hex[:12], board_id=board.id, title=title.strip())
+        card.move_to(list_name)
+        self.repo.save_card(card)
+        self.repo.log(board.id, card.id, person.email, f"added card {card.title!r}")
+        return _card(card)
 
-    def list_overdue(self, user: User) -> List[Dict[str, Any]]:
-        boards = self.repo.get_user_accessible_boards(user)
-        board_ids = [b.id for b in boards]
-        return self.repo.get_overdue_cards(board_ids)
+    def move_card(self, person: Person, card_id: str, list_name: str) -> dict:
+        board, card = self._find_card(card_id, person)
+        board.require_edit(person)
+        before = card.list_name
+        card.move_to(list_name)
+        self.repo.save_card(card)
+        self.repo.log(board.id, card.id, person.email, f"moved from {before} to {list_name}")
+        return _card(card)
+
+    def suggest_checklist(self, person: Person, card_id: str) -> dict:
+        _, card = self._find_card(card_id, person)
+        if self.assistant is None:
+            raise Invalid("no AI assistant configured")
+        return {"card_id": card.id, "suggested_checklist": self.assistant.checklist(card.title)}
 `,
   },
   {
-    path: 'app/mcp/server.py',
+    path: 'app/boards/doors/mcp.py',
     language: 'python',
-    description: 'FastMCP endpoint exposing real actions (move_card, add_card, list_my_cards).',
-    content: `from fastmcp import FastMCP
-from app.application.use_cases import BoardUseCases
-from app.infrastructure.datak3 import DataK3Repository
-from app.infrastructure.appid import AppIdAuth
-from app.infrastructure.models import DodilModelsClient
+    description: 'MCP Door exposing tools to Claude and ChatGPT.',
+    content: `"""The MCP door: the same use cases as the web routes, as tools Claude or ChatGPT can call."""
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from boards.application.use_cases import Boards, NotFound
+from boards.doors.identity import person_from
+from boards.domain.model import Forbidden, Invalid
 
-mcp = FastMCP("taskflow-mcp")
-repo = DataK3Repository()
-ai = DodilModelsClient()
-use_cases = BoardUseCases(repo, ai)
+INSTRUCTIONS = ("A team task board. Lists are 'To do', 'Doing' and 'Done'. Use my_boards first "
+                "to find board ids, then show_board to see its cards.")
 
-@mcp.tool()
-def list_my_cards(ctx) -> str:
-    """Lists all task cards assigned to the authenticated user across visible boards."""
-    user = AppIdAuth.get_current_user(ctx)
-    cards = use_cases.list_my_cards(user)
-    if not cards:
-        return "You have no active tasks assigned."
-    return "\\n".join([f"- [#{c['id']}] {c['title']} (Due {c['due_date']}) on {c['board_name']}" for c in cards])
+def build_mcp(boards: Boards) -> MCPServer:
+    server = MCPServer(name="boards", instructions=INSTRUCTIONS)
 
-@mcp.tool()
-def move_card(card_id: int, target_list: str, ctx) -> str:
-    """Moves a card to a different list (e.g., 'Done', 'Doing'). Enforces role rules."""
-    user = AppIdAuth.get_current_user(ctx)
-    result = use_cases.move_card(user, card_id, target_list)
-    return f"Card #{card_id} successfully moved to {result['new_list']}."
+    def call(ctx: Context, fn, *args):
+        person = person_from(ctx.headers or {})
+        if person is None:
+            raise ToolError("401: sign in first")
+        try:
+            return fn(person, *args)
+        except (NotFound, Forbidden, Invalid) as e:
+            raise ToolError(str(e))
 
-@mcp.tool()
-def list_overdue(ctx) -> str:
-    """Finds all cards that have passed their due date and are not in Done."""
-    user = AppIdAuth.get_current_user(ctx)
-    overdue = use_cases.list_overdue(user)
-    if not overdue:
-        return "No overdue tasks found."
-    return "\\n".join([f"⚠️ [#{c['id']}] {c['title']} (Overdue: {c['due_date']}) - {c['board_name']}" for c in overdue])
+    @server.tool()
+    def my_boards(ctx: Context) -> list:
+        """The boards you are on, with your role on each."""
+        return call(ctx, boards.my_boards)
+
+    @server.tool()
+    def show_board(board_id: str, ctx: Context) -> dict:
+        """A board and all its cards, grouped by list."""
+        return call(ctx, boards.show_board, board_id)
+
+    @server.tool()
+    def create_board(title: str, ctx: Context) -> dict:
+        """Create a board. You become its owner."""
+        return call(ctx, boards.create_board, title)
+
+    @server.tool()
+    def add_card(board_id: str, title: str, ctx: Context, list_name: str = "To do") -> dict:
+        """Add a card to a list on a board."""
+        return call(ctx, boards.add_card, board_id, title, list_name)
+
+    @server.tool()
+    def move_card(card_id: str, list_name: str, ctx: Context) -> dict:
+        """Move a card to 'To do', 'Doing' or 'Done'."""
+        return call(ctx, boards.move_card, card_id, list_name)
+
+    @server.tool()
+    def add_member(board_id: str, email: str, ctx: Context, role: str = "member") -> dict:
+        """Owner only: add someone to a board as 'member' or 'viewer'."""
+        return call(ctx, boards.add_member, board_id, email, role)
+
+    @server.tool()
+    def suggest_checklist(card_id: str, ctx: Context) -> dict:
+        """AI suggestion of a checklist for a card."""
+        return call(ctx, boards.suggest_checklist, card_id)
+
+    return server
+`,
+  },
+  {
+    path: 'app/boards/main.py',
+    language: 'python',
+    description: 'FastAPI entry point with /mcp endpoint and RFC 9728 auth discovery.',
+    content: `"""FastAPI app wiring web routes, /mcp, and RFC 9728 sign-in discovery metadata."""
+import json
+import os
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from starlette.routing import Route
+from boards.application.use_cases import Boards
+from boards.doors.identity import person_from
+from boards.doors.mcp import build_mcp
+from boards.doors.web import build_router
+from boards.infrastructure.dodil import ModelsAssistant
+from boards.infrastructure.repository import SqlBoards
+
+APPID = os.environ.get("APPID_PUBLIC_URL", "https://appid.dodil.io").rstrip("/")
+POOL = os.environ.get("DODIL_USER_POOL", "")
+METADATA = "/.well-known/oauth-protected-resource"
+
+def create_app(boards: Boards) -> FastAPI:
+    gate = {"mcp": None}
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        mcp_app = build_mcp(boards).streamable_http_app(
+            streamable_http_path="/mcp", stateless_http=True, json_response=True)
+        gate["mcp"] = mcp_app
+        async with mcp_app.router.lifespan_context(mcp_app):
+            yield
+
+    app = FastAPI(title="boards", lifespan=lifespan)
+
+    def base(request: Request) -> str:
+        h = request.headers
+        return f"{h.get('x-forwarded-proto', 'https')}://{h.get('x-forwarded-host', h.get('host'))}"
+
+    @app.get("/healthz", include_in_schema=False)
+    def healthz():
+        return {"ok": True}
+
+    @app.get(METADATA, include_in_schema=False)
+    @app.get(METADATA + "/mcp", include_in_schema=False)
+    def metadata(request: Request):
+        return {"resource": base(request) + "/mcp", "authorization_servers": [f"{APPID}/{POOL}"],
+                "bearer_methods_supported": ["header"], "resource_name": "boards"}
+
+    class McpDoor:
+        async def __call__(self, scope, receive, send):
+            headers = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
+            if person_from(headers) is None:
+                body = json.dumps({"detail": "sign in first"}).encode()
+                link = f'Bearer resource_metadata="{base(Request(scope))}{METADATA}/mcp"'
+                await send({"type": "http.response.start", "status": 401, "headers": [
+                    (b"content-type", b"application/json"), (b"www-authenticate", link.encode())]})
+                await send({"type": "http.response.body", "body": body})
+                return
+            await gate["mcp"]({**scope, "path": "/mcp"}, receive, send)
+
+    mcp_door = McpDoor()
+    for path in ("/mcp", "/mcp/"):
+        app.router.routes.append(Route(path, endpoint=mcp_door, methods=["GET", "POST", "DELETE"]))
+    app.include_router(build_router(boards))
+    return app
+
+app = create_app(Boards(SqlBoards(), ModelsAssistant()))
 `,
   },
   {
     path: 'README.md',
     language: 'markdown',
-    description: 'Contest submission README with live links, test logins, and design decisions.',
+    description: 'Contest submission README with live links, test logins, and 5 honest lines.',
     content: `# TaskFlow — The Trello Replacement for Dodil
 
 > Plan. Organize. Get it done. Built for the **Dodil Boards Challenge**.
 
 TaskFlow is a high-velocity team task board built natively on Dodil cloud services:
-- **DataK3**: Real-time Postgres data storage with primary keys and foreign keys.
+- **DataK3**: Real-time Postgres data storage with primary keys (\`boards\`, \`memberships\`, \`cards\`, \`activity\`).
 - **Dodil appid**: Zero-friction user pool authentication with role enforcement (\`owner\`, \`member\`, \`viewer\`).
 - **Dodil Models**: Built-in AI with Kimi K2.6 for card checklists and semantic search.
-- **Native MCP Endpoint**: Claude & ChatGPT connect directly to run actions (\`move_card\`, \`list_my_cards\`, \`list_overdue\`).
+- **Native MCP Endpoint**: Claude & ChatGPT connect directly to run actions (\`move_card\`, \`show_board\`, \`add_card\`, \`suggest_checklist\`).
 
 ---
 
@@ -324,7 +432,8 @@ TaskFlow is a high-velocity team task board built natively on Dodil cloud servic
 
 Run in your terminal:
 \`\`\`bash
-dodil git remix acme-org/taskflow --to-org <your-org> --name taskflow
+dodil update                                   # CLI 0.1.89 or later
+dodil git remix dodil/boards-challenge --to-org <your-org> --name taskflow
 \`\`\`
 
 ### Post-Remix Sign-in Step (Required):
